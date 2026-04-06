@@ -204,87 +204,78 @@ function injectZoomNav() {
         const imgs = bucket[entityKey] || [];
         if (imgs.length < 2) return;
 
-        setTimeout(() => {
-            // Расширенный поиск попапа ST
-            const $popup = $(
-                ".zoomed_avatar, #avatar_zoom_popup, .avatar_zoom_image, " +
-                "[id*='zoom'], [class*='zoom_avatar'], " +
-                "[class*='zoomed']"
-            ).filter(":visible").first();
+        // MutationObserver — ждём появления zoomed_avatar_img в DOM
+        const observer = new MutationObserver((mutations, obs) => {
+            const $img = $("img.zoomed_avatar_img").filter(":visible").first();
+            if (!$img.length) return;
 
-            console.log("[AvatarGallery] zoom popup found:", $popup.length, $popup[0]);
+            obs.disconnect();
 
-            // Запасной вариант — ищем фиксированный оверлей поверх страницы
-            let $target = $popup.length ? $popup : null;
-            if (!$target) {
-                const $overlay = $("body").children("div").filter(function() {
-                    const pos = $(this).css("position");
-                    return (pos === "fixed" || pos === "absolute") && $(this).is(":visible");
-                }).last();
-                console.log("[AvatarGallery] fallback overlay:", $overlay.length, $overlay[0]);
-                $target = $overlay.length ? $overlay : null;
-            }
-
-            if (!$target || $target.find(".ag-zoom-nav").length) return;
+            // Уже добавлены стрелки?
+            if ($img.parent().find(".ag-zoom-nav").length) return;
 
             let currentIdx = 0;
 
             const $nav = $(`
                 <div class="ag-zoom-nav" style="
-                    position:absolute;
-                    bottom:12px;
-                    left:50%;
-                    transform:translateX(-50%);
-                    z-index:99999;
-                    display:flex;
-                    gap:10px;
-                    pointer-events:all;
+                    position: absolute;
+                    bottom: 12px;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    z-index: 99999;
+                    display: flex;
+                    gap: 10px;
+                    pointer-events: all;
                 ">
                     <button class="ag-zoom-btn ag-prev" style="
-                        background:rgba(0,0,0,0.75);
-                        color:#fff;
-                        border:none;
-                        border-radius:6px;
-                        padding:8px 18px;
-                        font-size:1.4em;
-                        cursor:pointer;
-                        line-height:1;
+                        background: rgba(0,0,0,0.75);
+                        color: #fff;
+                        border: none;
+                        border-radius: 6px;
+                        padding: 8px 20px;
+                        font-size: 1.5em;
+                        cursor: pointer;
+                        line-height: 1;
+                        user-select: none;
                     ">&#8592;</button>
                     <button class="ag-zoom-btn ag-next" style="
-                        background:rgba(0,0,0,0.75);
-                        color:#fff;
-                        border:none;
-                        border-radius:6px;
-                        padding:8px 18px;
-                        font-size:1.4em;
-                        cursor:pointer;
-                        line-height:1;
+                        background: rgba(0,0,0,0.75);
+                        color: #fff;
+                        border: none;
+                        border-radius: 6px;
+                        padding: 8px 20px;
+                        font-size: 1.5em;
+                        cursor: pointer;
+                        line-height: 1;
+                        user-select: none;
                     ">&#8594;</button>
                 </div>
             `);
 
-            $target.css("position", "relative");
-            $target.append($nav);
+            const $parent = $img.parent();
+            $parent.css("position", "relative");
+            $parent.append($nav);
 
             $nav.find(".ag-prev").on("click", function(e) {
                 e.stopPropagation();
                 e.preventDefault();
                 currentIdx = (currentIdx - 1 + imgs.length) % imgs.length;
-                const src = imgs[currentIdx];
-                $target.is("img")
-                    ? $target.attr("src", src)
-                    : $target.find("img").first().attr("src", src);
+                $img.attr("src", imgs[currentIdx]);
             });
             $nav.find(".ag-next").on("click", function(e) {
                 e.stopPropagation();
                 e.preventDefault();
                 currentIdx = (currentIdx + 1) % imgs.length;
-                const src = imgs[currentIdx];
-                $target.is("img")
-                    ? $target.attr("src", src)
-                    : $target.find("img").first().attr("src", src);
+                $img.attr("src", imgs[currentIdx]);
             });
-        }, 300);
+
+            console.log(`[AvatarGallery] ✅ Zoom nav injected for ${imgs.length} images`);
+        });
+
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        // Страховка: отключить observer через 3 секунды
+        setTimeout(() => observer.disconnect(), 3000);
     });
 }
 
