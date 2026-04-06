@@ -1,4 +1,5 @@
-import { characters } from "../../../../script.js";
+import { characters, user_avatar, eventSource, event_types } from "../../../../script.js";
+import { power_user } from "../../../power-user.js";
 
 const extensionName = "avatar-gallery";
 const STORE_KEY = "avatar_gallery_data";
@@ -14,27 +15,27 @@ function saveData(data) {
     localStorage.setItem(STORE_KEY, JSON.stringify(data));
 }
 
-// ── State ─────────────────────────────────────────────────
 let state = {
     tab: "chars",
     selected: null,
     data: loadData(),
 };
 
-// ── Helpers ───────────────────────────────────────────────
+// ── Entity lists ──────────────────────────────────────────
 function getEntityList() {
     if (state.tab === "chars") {
         return (characters || []).map(c => ({
             key: c.avatar,
             name: c.name,
-            avatar: c.avatar ? `characters/${c.avatar}` : "img/ai4.png",
+            thumb: `thumbnail?type=avatar&file=${encodeURIComponent(c.avatar)}`,
         }));
     } else {
-        const p = window.power_user?.personas || {};
-        return Object.entries(p).map(([key, name]) => ({
+        // power_user.personas = { avatarId: name }
+        const personas = power_user?.personas || {};
+        return Object.entries(personas).map(([key, name]) => ({
             key,
             name: name || key,
-            avatar: key ? `User Avatars/${key}` : "img/ai4.png",
+            thumb: `User Avatars/${key}`,
         }));
     }
 }
@@ -54,15 +55,17 @@ function renderEntityList() {
     const $el = $("#ag-entity-list");
     $el.empty();
     const list = getEntityList();
+
     if (!list.length) {
         $el.append('<div style="padding:6px;font-size:0.8em;opacity:0.5;text-align:center">Список пуст</div>');
         return;
     }
+
     list.forEach(e => {
         const isSelected = e.key === state.selected;
         const $item = $(`
             <div class="ag-entity-item${isSelected ? " selected" : ""}" data-key="${e.key}">
-                <img src="${e.avatar}" onerror="this.src='img/ai4.png'" />
+                <img src="${e.thumb}" onerror="this.src='img/ai4.png'" />
                 <span>${e.name}</span>
             </div>
         `);
@@ -81,7 +84,7 @@ function renderGallery() {
     $gal.empty();
 
     if (!state.selected) {
-        $label.text("Выберите персонажа или персону выше");
+        $label.text(state.tab === "chars" ? "Выберите персонажа выше" : "Выберите персону выше");
         $gal.append('<div class="ag-empty-gallery">—</div>');
         $("#ag-upload-row").hide();
         return;
@@ -99,7 +102,7 @@ function renderGallery() {
 
     imgs.forEach((src, i) => {
         const $thumb = $(`
-            <div class="ag-thumb${i === 0 ? " active" : ""}" data-idx="${i}">
+            <div class="ag-thumb${i === 0 ? " active" : ""}" data-idx="${i}" title="Кликни чтобы применить">
                 <img src="${src}" onerror="this.style.opacity='0.3'" />
                 <button class="ag-thumb-del" title="Удалить">✕</button>
             </div>
@@ -117,21 +120,27 @@ function renderGallery() {
 function applyAvatar(idx) {
     const imgs = getGallery();
     if (!imgs[idx]) return;
+
+    // Rotate so chosen is first (= active)
     const rotated = [...imgs.slice(idx), ...imgs.slice(0, idx)];
     setGallery(rotated);
     const src = rotated[0];
 
     if (state.tab === "chars") {
-        $(`.mes img.avatar`).each(function() {
-            const $mes = $(this).closest(".mes");
-            const charName = $mes.attr("ch_name") || $mes.find(".name_text").text();
-            const ch = (characters || []).find(c => c.name === charName && c.avatar === state.selected);
-            if (ch) $(this).attr("src", src);
+        // Patch rendered avatars in chat for this character
+        $(".mes").each(function() {
+            const chName = $(this).attr("ch_name");
+            const ch = (characters || []).find(c => c.name === chName && c.avatar === state.selected);
+            if (ch) $(this).find("img.avatar").attr("src", src);
         });
+        // Patch character list
         $(`.character_select[data-avatar="${state.selected}"] img`).attr("src", src);
+        $(`.avatar_container[imgfile="${state.selected}"] img`).attr("src", src);
     } else {
+        // Patch all user messages in chat
         $(".mes.is_user img.avatar").attr("src", src);
-        $("#user_avatar_block img").attr("src", src);
+        // Patch persona panel thumbnail if visible
+        $(`.persona_select[data-uid="${state.selected}"] img`).attr("src", src);
     }
 
     renderGallery();
@@ -143,6 +152,24 @@ function removeAvatar(idx) {
     imgs.splice(idx, 1);
     setGallery(imgs);
     renderGallery();
+}
+
+// ── Auto-select current entity ────────────────────────────
+function autoSelectCurrent() {
+    // Auto-select current character or persona based on context
+    if (state.tab === "chars") {
+        // Find currently open character
+        const currentChar = characters?.[window.this_chid];
+        if (currentChar && currentChar.avatar) {
+            state.selected = currentChar.avatar;
+        }
+    } else {
+        // Current persona = user_avatar global
+        const currentPersona = window.user_avatar;
+        if (currentPersona) {
+            state.selected = currentPersona;
+        }
+    }
 }
 
 // ── Upload ────────────────────────────────────────────────
@@ -166,35 +193,35 @@ function handleUpload(files) {
 
 // ── Zoom overlay arrows ───────────────────────────────────
 function injectZoomNav() {
-    $(document).on("click", ".mes img.avatar, #user_avatar_block img", function() {
+    $(document).on("click", ".mes img.avatar", function() {
+        const $mes = $(this).closest(".mes");
+        let entityKey = null;
+        let tab = null;
+
+        if ($mes.hasClass("is_user")) {
+            tab = "personas";
+            entityKey = window.user_avatar || null;
+        } else {
+            tab = "chars";
+            const chName = $mes.attr("ch_name");
+            const ch = (characters || []).find(c => c.name === chName);
+            entityKey = ch ? ch.avatar : null;
+        }
+
+        if (!entityKey) return;
+        const bucket = tab === "chars" ? state.data.chars : state.data.personas;
+        const imgs = bucket[entityKey] || [];
+        if (imgs.length < 2) return;
+
+        // Wait for ST zoom popup
         setTimeout(() => {
-            const $zoom = $(".avatar_zoom_image, #avatar_zoom_popup, .zoomed_avatar").first();
-            if (!$zoom.length || $zoom.find(".ag-zoom-nav").length) return;
-
-            const $mes = $(this).closest(".mes");
-            let entityKey = null;
-            let tab = null;
-
-            if ($mes.hasClass("is_user")) {
-                tab = "personas";
-                entityKey = window.user_avatar || null;
-            } else if ($mes.length) {
-                tab = "chars";
-                const charName = $mes.attr("ch_name") || $mes.find(".name_text").text();
-                const ch = (characters || []).find(c => c.name === charName);
-                entityKey = ch ? ch.avatar : null;
-            }
-
-            if (!entityKey) return;
-            const bucket = tab === "chars" ? state.data.chars : state.data.personas;
-            const imgs = bucket[entityKey] || [];
-            if (imgs.length < 2) return;
+            // ST uses #avatar_zoom_popup or similar — find the topmost overlay
+            const $popup = $(".zoomed_avatar, #avatar_zoom_popup, .avatar_zoom_image").first();
+            if (!$popup.length || $popup.find(".ag-zoom-nav").length) return;
 
             let currentIdx = 0;
-            const $wrap = $zoom.closest("[style*='position']").length
-                ? $zoom.closest("[style*='position']")
-                : $zoom.parent();
 
+            const $wrap = $popup.parent();
             $wrap.css("position", "relative");
 
             const $nav = $(`
@@ -203,21 +230,19 @@ function injectZoomNav() {
                     <button class="ag-zoom-btn ag-next">&#8594;</button>
                 </div>
             `);
-            $wrap.append($nav);
+            $popup.after($nav);
 
             $nav.find(".ag-prev").on("click", e => {
                 e.stopPropagation();
                 currentIdx = (currentIdx - 1 + imgs.length) % imgs.length;
-                $zoom.find("img").first().attr("src", imgs[currentIdx]);
-                $zoom.attr("src", imgs[currentIdx]);
+                $popup.is("img") ? $popup.attr("src", imgs[currentIdx]) : $popup.find("img").attr("src", imgs[currentIdx]);
             });
             $nav.find(".ag-next").on("click", e => {
                 e.stopPropagation();
                 currentIdx = (currentIdx + 1) % imgs.length;
-                $zoom.find("img").first().attr("src", imgs[currentIdx]);
-                $zoom.attr("src", imgs[currentIdx]);
+                $popup.is("img") ? $popup.attr("src", imgs[currentIdx]) : $popup.find("img").attr("src", imgs[currentIdx]);
             });
-        }, 200);
+        }, 250);
     });
 }
 
@@ -254,32 +279,62 @@ jQuery(async () => {
 
         $("#extensions_settings2").append(html);
 
+        // Tabs
         $("#ag-tab-chars").on("click", () => {
-            state.tab = "chars"; state.selected = null;
+            state.tab = "chars";
+            state.selected = null;
             $("#ag-tab-chars").addClass("active");
             $("#ag-tab-personas").removeClass("active");
-            renderEntityList(); renderGallery();
+            autoSelectCurrent();
+            renderEntityList();
+            renderGallery();
         });
         $("#ag-tab-personas").on("click", () => {
-            state.tab = "personas"; state.selected = null;
+            state.tab = "personas";
+            state.selected = null;
             $("#ag-tab-chars").removeClass("active");
             $("#ag-tab-personas").addClass("active");
-            renderEntityList(); renderGallery();
+            autoSelectCurrent();
+            renderEntityList();
+            renderGallery();
         });
 
+        // Upload
         $("#ag-upload-btn").on("click", () => $("#ag-file-input").trigger("click"));
         $("#ag-file-input").on("change", function() {
             handleUpload(this.files);
             this.value = "";
         });
 
+        // Drag & drop
         $("#ag-gallery").on("dragover", e => e.preventDefault())
             .on("drop", e => {
                 e.preventDefault();
                 handleUpload(e.originalEvent.dataTransfer.files);
             });
 
+        // Auto-select when character changes
+        eventSource.on(event_types.CHARACTER_SELECTED, () => {
+            if (state.tab === "chars") {
+                autoSelectCurrent();
+                renderEntityList();
+                renderGallery();
+            }
+        });
+
+        // Auto-select when persona changes
+        eventSource.on(event_types.PERSONA_SELECTED ?? "persona_selected", () => {
+            if (state.tab === "personas") {
+                autoSelectCurrent();
+                renderEntityList();
+                renderGallery();
+            }
+        });
+
         injectZoomNav();
+
+        // Initial render with auto-select
+        autoSelectCurrent();
         renderEntityList();
         renderGallery();
 
