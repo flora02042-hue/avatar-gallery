@@ -30,7 +30,6 @@ function getEntityList() {
             thumb: `thumbnail?type=avatar&file=${encodeURIComponent(c.avatar)}`,
         }));
     } else {
-        // power_user.personas = { avatarId: name }
         const personas = power_user?.personas || {};
         return Object.entries(personas).map(([key, name]) => ({
             key,
@@ -121,25 +120,20 @@ function applyAvatar(idx) {
     const imgs = getGallery();
     if (!imgs[idx]) return;
 
-    // Rotate so chosen is first (= active)
     const rotated = [...imgs.slice(idx), ...imgs.slice(0, idx)];
     setGallery(rotated);
     const src = rotated[0];
 
     if (state.tab === "chars") {
-        // Patch rendered avatars in chat for this character
         $(".mes").each(function() {
             const chName = $(this).attr("ch_name");
             const ch = (characters || []).find(c => c.name === chName && c.avatar === state.selected);
             if (ch) $(this).find("img.avatar").attr("src", src);
         });
-        // Patch character list
         $(`.character_select[data-avatar="${state.selected}"] img`).attr("src", src);
         $(`.avatar_container[imgfile="${state.selected}"] img`).attr("src", src);
     } else {
-        // Patch all user messages in chat
         $(".mes.is_user img.avatar").attr("src", src);
-        // Patch persona panel thumbnail if visible
         $(`.persona_select[data-uid="${state.selected}"] img`).attr("src", src);
     }
 
@@ -156,15 +150,12 @@ function removeAvatar(idx) {
 
 // ── Auto-select current entity ────────────────────────────
 function autoSelectCurrent() {
-    // Auto-select current character or persona based on context
     if (state.tab === "chars") {
-        // Find currently open character
         const currentChar = characters?.[window.this_chid];
         if (currentChar && currentChar.avatar) {
             state.selected = currentChar.avatar;
         }
     } else {
-        // Current persona = user_avatar global
         const currentPersona = window.user_avatar;
         if (currentPersona) {
             state.selected = currentPersona;
@@ -213,36 +204,87 @@ function injectZoomNav() {
         const imgs = bucket[entityKey] || [];
         if (imgs.length < 2) return;
 
-        // Wait for ST zoom popup
         setTimeout(() => {
-            // ST uses #avatar_zoom_popup or similar — find the topmost overlay
-            const $popup = $(".zoomed_avatar, #avatar_zoom_popup, .avatar_zoom_image").first();
-            if (!$popup.length || $popup.find(".ag-zoom-nav").length) return;
+            // Расширенный поиск попапа ST
+            const $popup = $(
+                ".zoomed_avatar, #avatar_zoom_popup, .avatar_zoom_image, " +
+                "[id*='zoom'], [class*='zoom_avatar'], " +
+                "[class*='zoomed']"
+            ).filter(":visible").first();
+
+            console.log("[AvatarGallery] zoom popup found:", $popup.length, $popup[0]);
+
+            // Запасной вариант — ищем фиксированный оверлей поверх страницы
+            let $target = $popup.length ? $popup : null;
+            if (!$target) {
+                const $overlay = $("body").children("div").filter(function() {
+                    const pos = $(this).css("position");
+                    return (pos === "fixed" || pos === "absolute") && $(this).is(":visible");
+                }).last();
+                console.log("[AvatarGallery] fallback overlay:", $overlay.length, $overlay[0]);
+                $target = $overlay.length ? $overlay : null;
+            }
+
+            if (!$target || $target.find(".ag-zoom-nav").length) return;
 
             let currentIdx = 0;
 
-            const $wrap = $popup.parent();
-            $wrap.css("position", "relative");
-
             const $nav = $(`
-                <div class="ag-zoom-nav">
-                    <button class="ag-zoom-btn ag-prev">&#8592;</button>
-                    <button class="ag-zoom-btn ag-next">&#8594;</button>
+                <div class="ag-zoom-nav" style="
+                    position:absolute;
+                    bottom:12px;
+                    left:50%;
+                    transform:translateX(-50%);
+                    z-index:99999;
+                    display:flex;
+                    gap:10px;
+                    pointer-events:all;
+                ">
+                    <button class="ag-zoom-btn ag-prev" style="
+                        background:rgba(0,0,0,0.75);
+                        color:#fff;
+                        border:none;
+                        border-radius:6px;
+                        padding:8px 18px;
+                        font-size:1.4em;
+                        cursor:pointer;
+                        line-height:1;
+                    ">&#8592;</button>
+                    <button class="ag-zoom-btn ag-next" style="
+                        background:rgba(0,0,0,0.75);
+                        color:#fff;
+                        border:none;
+                        border-radius:6px;
+                        padding:8px 18px;
+                        font-size:1.4em;
+                        cursor:pointer;
+                        line-height:1;
+                    ">&#8594;</button>
                 </div>
             `);
-            $popup.after($nav);
 
-            $nav.find(".ag-prev").on("click", e => {
+            $target.css("position", "relative");
+            $target.append($nav);
+
+            $nav.find(".ag-prev").on("click", function(e) {
                 e.stopPropagation();
+                e.preventDefault();
                 currentIdx = (currentIdx - 1 + imgs.length) % imgs.length;
-                $popup.is("img") ? $popup.attr("src", imgs[currentIdx]) : $popup.find("img").attr("src", imgs[currentIdx]);
+                const src = imgs[currentIdx];
+                $target.is("img")
+                    ? $target.attr("src", src)
+                    : $target.find("img").first().attr("src", src);
             });
-            $nav.find(".ag-next").on("click", e => {
+            $nav.find(".ag-next").on("click", function(e) {
                 e.stopPropagation();
+                e.preventDefault();
                 currentIdx = (currentIdx + 1) % imgs.length;
-                $popup.is("img") ? $popup.attr("src", imgs[currentIdx]) : $popup.find("img").attr("src", imgs[currentIdx]);
+                const src = imgs[currentIdx];
+                $target.is("img")
+                    ? $target.attr("src", src)
+                    : $target.find("img").first().attr("src", src);
             });
-        }, 250);
+        }, 300);
     });
 }
 
